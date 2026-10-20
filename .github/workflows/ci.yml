@@ -1,0 +1,20 @@
+name: ORBIT bootstrap CI
+on:
+  push:
+  pull_request:
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m unittest discover -s tests -v
+        env:
+          PYTHONPATH: src
+      - run: |
+          mkdir -p /tmp/orbit-cleanroom-repo
+          PYTHONPATH=src python -m orbit init --repo example/cleanroom --target /tmp/orbit-cleanroom-repo
+          PYTHONPATH=src python -m orbit doctor --target /tmp/orbit-cleanroom-repo
+          PYTHONPATH=src python -m orbit validate --target /tmp/orbit-cleanroom-repo
