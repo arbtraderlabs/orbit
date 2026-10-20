@@ -1,0 +1,26 @@
+name: ORBIT implementation task
+description: Scoped, reviewable engineering task (issue creation is not execution)
+title: "[ORBIT] "
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective and context
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Allowed paths and prohibited changes
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance tests and evidence
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and escalation boundaries
