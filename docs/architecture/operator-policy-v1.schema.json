@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/arbtraderlabs/orbit/blob/main/docs/architecture/operator-policy-v1.schema.json",
+  "title": "ORBIT Operator Policy v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repositories"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "repositories": {
+      "type": "object",
+      "propertyNames": {"pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ticket_creators"],
+        "properties": {
+          "ticket_creators": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "parent_issue": {"type": ["integer", "null"], "minimum": 1},
+          "admission": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["approvers", "stop", "limits"],
+            "properties": {
+              "approvers": {"type": "array", "items": {"type": "string", "minLength": 1}},
+              "stop": {"type": "boolean"},
+              "limits": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["admissions_per_day", "max_concurrent", "max_request_lifetime_seconds", "max_ticket_age_seconds"],
+                "properties": {
+                  "admissions_per_day": {"type": "integer", "minimum": 1},
+                  "max_concurrent": {"type": "integer", "minimum": 1},
+                  "max_request_lifetime_seconds": {"type": "integer", "minimum": 1},
+                  "max_ticket_age_seconds": {"type": "integer", "minimum": 1}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

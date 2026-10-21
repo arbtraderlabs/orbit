@@ -8,6 +8,7 @@ Install into an unrelated GitHub repository and operate a governed, observable, 
 ## Trust boundaries
 - Repository content, issue bodies, PRs and agent output are untrusted inputs, never authority to elevate permissions.
 - Operator-approved policy and authenticated GitHub principal govern admission. Issue labels are advisory only.
+- Operator authorization policy is stored outside the target repository and binds creator/approver identities, STOP, admission budgets and expiry limits. A ticket request remains PROPOSED until an allowlisted operator confirms its canonical hash.
 - Explicitly distinguish PROPOSED, AUTHORISED, ADMITTED, RUNNING, DONE, REVIEW_FAILED, ACCEPTED, BLOCKED. DONE does not imply ACCEPTED.
 - Authorization must bind repository identity, issue, immutable source commit, permitted paths, operation class, policy version/hash, expiry and unique request ID. Receipt must be verifiable and replay-resistant.
 - No auto-merge, production deployment, secret creation, destructive worktree cleanup, cross-repo mutation or privilege escalation by default.
@@ -17,7 +18,7 @@ Install into an unrelated GitHub repository and operate a governed, observable, 
 1. CLI: init, doctor and validate in Phase 1; authenticated ticket creation in Phase 2. Ticket creation does not admit or execute work.
 2. Config: repository-independent orbit.json (versioned, schema-validated).
 3. GitHub adapter: issues, authenticated receipts, PRs, status comments; least privilege.
-4. Admission: policy + immutable request envelope + identity and receipt verification.
+4. Admission: policy + immutable request envelope + live GitHub identity/body/source verification; write ADMITTED receipts to a private local audit ledger.
 5. SQLite ledger: jobs, transitions, attempts, idempotency keys, budget accounting, receipts and errors.
 6. Dispatcher: durable queue and single-flight lease with crash recovery.
 7. Builder adapter: bounded local command invocation, timeout, allowed worktree, no inherited secrets by default.

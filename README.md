@@ -18,7 +18,7 @@
 ---
 
 > [!IMPORTANT]
-> **ORBIT is an early-stage, standalone framework.** The bootstrap CLI and authenticated ticket generator are under review; durable admission, worker execution, review, scheduling and delivery remain planned. The diagrams below describe the intended experience, not current runtime capabilities. It grew out of lessons from a separately governed, single-worker CrashDash pilot.
+> **ORBIT is an early-stage, standalone framework.** The bootstrap CLI, authenticated ticket generator and explicit admission gate are under review; durable worker execution, independent review, scheduling and PR delivery remain planned. The diagrams below describe the intended experience, not current runtime capabilities. It grew out of lessons from a separately governed, single-worker CrashDash pilot.
 
 ## The problem
 
@@ -234,7 +234,7 @@ An initial MVP could use a Python CLI, SQLite queue, one repository, one worker 
 
 ## What ORBIT is (and isn't)
 
-✅ A standalone Python bootstrap CLI and a proposed authenticated GitHub ticket generator, alongside a design for **agent orchestration**, **independent AI code review**, **human-in-the-loop automation** and **GitHub-driven development**.
+✅ A standalone Python bootstrap CLI, proposed authenticated GitHub ticket generation and an explicit operator admission gate, alongside a design for **agent orchestration**, **independent AI code review**, **human-in-the-loop automation** and **GitHub-driven development**.
 
 ❌ Not an autonomous worker, production deployer, guarantee of code correctness, or replacement for professional security review. Issue creation does not authorize or dispatch a job.
 

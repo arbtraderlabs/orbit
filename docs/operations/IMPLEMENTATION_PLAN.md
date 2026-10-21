@@ -13,8 +13,8 @@
 - Tests exercise empty unrelated repository, existing-file refusal, invalid repository, unsafe settings, missing config, and fresh-process CLI invocation.
 - Installation via `pip install -e .` from source, or `python -m orbit` from checkout.
 
-## Phase 2 — governed GitHub tickets
-Authenticated `gh api` principal checked against an operator-owned policy file outside the target checkout; ticket generator; repository identity and Git origin verification; pinned source SHA; body hash; optional native GitHub sub-issue parent linkage; machine-readable PROPOSED request. The request records the authenticated creator and is explicitly not an admission receipt. Issue creation alone must never authorize or claim dispatch. Admission, expiry, replay prevention and policy binding are Phase 2 follow-up work in #3.
+## Phase 2 — governed GitHub tickets and admission
+`#2` creates a versioned, pinned PROPOSED request through an authenticated `gh api` principal, after checking an operator-owned policy file outside the target checkout. It verifies repository identity, Git origin, issue creator/body and optional native sub-issue parent; the request carries the scoped ticket, source SHA and policy/body hashes. `#3` requires an allowlisted authenticated approver and typed canonical request hash, re-verifies the live issue and source commit, rejects stale requests/policy, checks STOP, UTC admission budget, concurrency and expiry, then records an ADMITTED receipt in a private local SQLite audit ledger. Neither step dispatches a worker.
 
 ## Phase 3 — durable worker
 SQLite ledger, queue leases, agent adapters, worktree isolation, timeout, STOP, budgets, retries, crash recovery, diff/test evidence, draft PR. Test with a totally unrelated disposable GitHub repo; verify issue -> authorised -> admitted -> worker -> commit -> draft PR.
