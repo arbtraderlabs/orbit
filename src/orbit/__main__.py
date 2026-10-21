@@ -182,7 +182,7 @@ def load_ticket(path_value):
     if not isinstance(dependencies, str) or not isinstance(escalation, str) or not escalation.strip():
         raise ValueError("ticket dependencies and escalation_boundaries must be strings; escalation_boundaries is required")
     lines = ["## Objective and context", objective.strip(), "", "## Allowed paths", *[f"- `{value.strip()}`" for value in allowed], "", "## Prohibited changes", *([f"- {value.strip()}" for value in prohibited] or ["- None specified"]), "", "## Acceptance tests and evidence", *[f"- {value.strip()}" for value in acceptance], "", "## Dependencies", dependencies.strip() or "None", "", "## Escalation boundaries", escalation.strip()]
-    return {"title": title.strip(), "body": "\n".join(lines)}
+    return {"title": title.strip(), "body": "\n".join(lines), "ticket": ticket}
 
 
 def run_ticket_create(args):
@@ -264,6 +264,7 @@ def run_ticket_create(args):
             "parent_issue": verified_parent["number"] if verified_parent else None,
         },
         "source": {"sha": source_sha},
+        "ticket": ticket["ticket"],
         "requested_by": {"login": actor["login"], "id": actor["id"]},
         "authorization": {
             "method": "github_authenticated_principal_allowlist",

@@ -64,6 +64,7 @@ class TicketGeneratorTests(unittest.TestCase):
 
         self.assertEqual(request["state"], "PROPOSED")
         self.assertEqual(request["source"]["sha"], self.source_sha)
+        self.assertEqual(request["ticket"]["scope"]["allowed_paths"], ["src/orbit"])
         self.assertEqual(request["repository"]["id"], 123)
         self.assertEqual(request["issue"]["number"], 12)
         self.assertEqual(request["issue"]["parent_issue"], 4)
