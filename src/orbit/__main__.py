@@ -4,11 +4,13 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -99,8 +101,13 @@ def gh_api(route, method=None, payload=None):
 
 
 def default_policy_path():
-    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     return config_home / "orbit" / "policy.json"
+
+
+def default_ledger_path():
+    state_home = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
+    return state_home / "orbit" / "admissions.sqlite3"
 
 
 def load_policy(path_value, repository):
@@ -128,9 +135,16 @@ def load_policy(path_value, repository):
             os.close(descriptor)
     if not isinstance(policy, dict) or type(policy.get("schema_version")) is not int or policy["schema_version"] != 1:
         raise ValueError("unsupported operator policy schema_version")
+    if set(policy) != {"schema_version", "repositories"}:
+        raise ValueError("operator policy fields do not match schema version 1")
     repositories = policy.get("repositories")
     if not isinstance(repositories, dict):
         raise ValueError("operator policy repositories must be an object")
+    if any(not valid_repository(name) for name in repositories):
+        raise ValueError("operator policy contains an invalid repository name")
+    for entry in repositories.values():
+        if not isinstance(entry, dict) or set(entry) - {"ticket_creators", "parent_issue", "admission"}:
+            raise ValueError("operator policy repository fields do not match schema version 1")
     matching = [value for name, value in repositories.items() if isinstance(name, str) and name.casefold() == repository.casefold()]
     if len(matching) != 1 or not isinstance(matching[0], dict):
         raise ValueError("repository is not present in the operator policy")
@@ -144,14 +158,7 @@ def load_policy(path_value, repository):
     return policy, creators, parent, hashlib.sha256(policy_bytes).hexdigest()
 
 
-def load_ticket(path_value):
-    path = Path(path_value).expanduser()
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("ticket request must be an existing regular file, not a symlink")
-    try:
-        ticket = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError("ticket request contains invalid JSON") from exc
+def render_ticket(ticket):
     if not isinstance(ticket, dict) or type(ticket.get("schema_version")) is not int or ticket["schema_version"] != 1:
         raise ValueError("unsupported ticket schema_version")
     expected_fields = {"schema_version", "title", "objective", "scope", "acceptance_tests", "dependencies", "escalation_boundaries"}
@@ -183,6 +190,280 @@ def load_ticket(path_value):
         raise ValueError("ticket dependencies and escalation_boundaries must be strings; escalation_boundaries is required")
     lines = ["## Objective and context", objective.strip(), "", "## Allowed paths", *[f"- `{value.strip()}`" for value in allowed], "", "## Prohibited changes", *([f"- {value.strip()}" for value in prohibited] or ["- None specified"]), "", "## Acceptance tests and evidence", *[f"- {value.strip()}" for value in acceptance], "", "## Dependencies", dependencies.strip() or "None", "", "## Escalation boundaries", escalation.strip()]
     return {"title": title.strip(), "body": "\n".join(lines), "ticket": ticket}
+
+
+def load_ticket(path_value):
+    path = Path(path_value).expanduser()
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("ticket request must be an existing regular file, not a symlink")
+    try:
+        ticket = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("ticket request contains invalid JSON") from exc
+    return render_ticket(ticket)
+
+
+def canonical_hash(value):
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def load_request(path_value):
+    path = Path(path_value).expanduser()
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("request must be an existing regular file, not a symlink")
+    try:
+        request = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("request contains invalid JSON") from exc
+    if not isinstance(request, dict) or type(request.get("schema_version")) is not int or request["schema_version"] != 1:
+        raise ValueError("unsupported request schema_version")
+    if request.get("state") != "PROPOSED":
+        raise ValueError("only PROPOSED requests can be admitted")
+    if set(request) != {"schema_version", "request_id", "state", "repository", "issue", "source", "ticket", "requested_by", "authorization", "created_at"}:
+        raise ValueError("request envelope fields do not match schema version 1")
+    try:
+        if str(uuid.UUID(request.get("request_id", ""))) != request["request_id"]:
+            raise ValueError("request_id must be a canonical UUID")
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("request_id must be a canonical UUID") from exc
+    repo = request.get("repository")
+    issue = request.get("issue")
+    source = request.get("source")
+    authorization = request.get("authorization")
+    requester = request.get("requested_by")
+    ticket = request.get("ticket")
+    if (isinstance(repo, dict) and set(repo) != {"full_name", "id"}
+            or isinstance(issue, dict) and set(issue) != {"number", "id", "url", "body_sha256", "parent_issue"}
+            or isinstance(source, dict) and set(source) != {"sha"}
+            or isinstance(authorization, dict) and set(authorization) != {"method", "scope", "job_admission", "policy_sha256"}
+            or isinstance(requester, dict) and set(requester) != {"login", "id"}):
+        raise ValueError("request envelope fields do not match schema version 1")
+    if (not isinstance(repo, dict) or not valid_repository(repo.get("full_name")) or type(repo.get("id")) is not int
+            or not isinstance(issue, dict) or type(issue.get("id")) is not int or type(issue.get("number")) is not int
+            or not isinstance(issue.get("url"), str) or not re.fullmatch(r"[0-9a-f]{64}", issue.get("body_sha256", ""))
+            or (issue.get("parent_issue") is not None and (type(issue["parent_issue"]) is not int or issue["parent_issue"] < 1))
+            or not isinstance(source, dict) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source.get("sha", ""))
+            or not isinstance(authorization, dict) or authorization.get("method") != "github_authenticated_principal_allowlist"
+            or authorization.get("scope") != "ticket_creation_only" or authorization.get("job_admission") != "not_authorized"
+            or not re.fullmatch(r"[0-9a-f]{64}", authorization.get("policy_sha256", ""))
+            or not isinstance(requester, dict) or not isinstance(requester.get("login"), str) or type(requester.get("id")) is not int
+            or type(repo.get("id")) is not int or repo["id"] < 1 or issue["id"] < 1 or issue["number"] < 1
+            or requester["id"] < 1 or not isinstance(request.get("created_at"), str)):
+        raise ValueError("request envelope is incomplete or malformed")
+    if issue["url"].casefold() != f"https://github.com/{repo['full_name']}/issues/{issue['number']}".casefold():
+        raise ValueError("request issue URL does not match its repository and issue number")
+    rendered = render_ticket(ticket)
+    return request, rendered
+
+
+def admission_settings(policy, repository):
+    repositories = policy.get("repositories")
+    matching = [value for name, value in repositories.items() if isinstance(name, str) and name.casefold() == repository.casefold()]
+    if len(matching) != 1 or not isinstance(matching[0], dict):
+        raise ValueError("repository is not present in the operator policy")
+    entry = matching[0]
+    admission = entry.get("admission")
+    if not isinstance(admission, dict):
+        raise ValueError("operator policy has no admission settings")
+    if set(admission) != {"approvers", "stop", "limits"}:
+        raise ValueError("operator policy admission fields do not match schema version 1")
+    approvers = admission.get("approvers")
+    if not isinstance(approvers, list) or any(not isinstance(name, str) or not name.strip() for name in approvers):
+        raise ValueError("operator policy admission.approvers must be a list of GitHub logins")
+    if admission.get("stop", True) is not False:
+        raise ValueError("admission is stopped by operator policy")
+    limits = admission.get("limits")
+    if not isinstance(limits, dict):
+        raise ValueError("operator policy admission.limits is required")
+    expected_limits = {"admissions_per_day", "max_concurrent", "max_request_lifetime_seconds", "max_ticket_age_seconds"}
+    if set(limits) != expected_limits:
+        raise ValueError("operator policy admission limits do not match schema version 1")
+    for name in expected_limits:
+        value = limits.get(name)
+        if type(value) is not int or value < 1:
+            raise ValueError(f"invalid operator policy admission.limits.{name}")
+    parent = entry.get("parent_issue")
+    if parent is not None and (type(parent) is not int or parent < 1):
+        raise ValueError("operator policy parent_issue must be a positive issue number or null")
+    return entry, admission, approvers, limits, parent
+
+
+def secure_ledger_path(path_value):
+    path = Path(path_value).expanduser()
+    if path.is_symlink():
+        raise ValueError("admission ledger path must not be a symlink")
+    parent = path.parent
+    parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    if parent.is_symlink() or not parent.is_dir():
+        raise ValueError("admission ledger directory must be a real directory")
+    if hasattr(os, "getuid"):
+        parent_stat = parent.stat()
+        if parent_stat.st_uid != os.getuid() or parent_stat.st_mode & 0o077:
+            raise ValueError("admission ledger directory must be private and owned by the current user")
+    if not path.exists():
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("admission ledger must be a regular file")
+    if hasattr(os, "getuid"):
+        metadata = path.stat()
+        if metadata.st_uid != os.getuid() or metadata.st_mode & 0o077:
+            raise ValueError("admission ledger file must be private and owned by the current user")
+    return path
+
+
+def record_admission(receipt, ledger_path, limits):
+    path = secure_ledger_path(ledger_path)
+    try:
+        connection = sqlite3.connect(path, timeout=10, isolation_level=None)
+    except sqlite3.Error as exc:
+        raise ValueError(f"could not open admission ledger: {exc}") from exc
+    try:
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("""CREATE TABLE IF NOT EXISTS admissions (
+            request_id TEXT PRIMARY KEY,
+            repository_id INTEGER NOT NULL,
+            issue_id INTEGER NOT NULL,
+            issue_number INTEGER NOT NULL,
+            request_sha256 TEXT NOT NULL,
+            policy_sha256 TEXT NOT NULL,
+            admitted_by TEXT NOT NULL,
+            admitted_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            receipt_json TEXT NOT NULL,
+            UNIQUE(repository_id, issue_id)
+        )""")
+        connection.execute("BEGIN IMMEDIATE")
+        now = receipt["admitted_at"]
+        utc_day = now[:10]
+        repo_id = receipt["repository"]["id"]
+        count = connection.execute("SELECT COUNT(*) FROM admissions WHERE repository_id = ? AND substr(admitted_at, 1, 10) = ?", (repo_id, utc_day)).fetchone()[0]
+        if count >= limits["admissions_per_day"]:
+            raise ValueError("daily admission budget exhausted")
+        active = connection.execute("SELECT COUNT(*) FROM admissions WHERE repository_id = ? AND expires_at > ?", (repo_id, now)).fetchone()[0]
+        if active >= limits["max_concurrent"]:
+            raise ValueError("concurrent admission limit reached")
+        connection.execute(
+            "INSERT INTO admissions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (receipt["request_id"], receipt["repository"]["id"], receipt["issue"]["id"], receipt["issue"]["number"], receipt["request_sha256"], receipt["policy_sha256"], receipt["admitted_by"]["login"], now, receipt["expires_at"], json.dumps(receipt, sort_keys=True)),
+        )
+        connection.commit()
+    except sqlite3.IntegrityError as exc:
+        connection.rollback()
+        raise ValueError("request or issue has already been admitted") from exc
+    except sqlite3.Error as exc:
+        connection.rollback()
+        raise ValueError(f"admission ledger operation failed: {exc}") from exc
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def admit_request(args):
+    request, rendered = load_request(args.request)
+    target = target_path(args.target)
+    orbit_dir = target / ".orbit"
+    config_file = orbit_dir / "config.json"
+    if orbit_dir.is_symlink() or config_file.is_symlink() or not config_file.is_file():
+        raise ValueError("missing safe .orbit/config.json")
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    validate(config)
+    repository = config["repository"]
+    if repository.casefold() != request["repository"]["full_name"].casefold():
+        raise ValueError("request repository does not match target configuration")
+    if github_remote_repository(git_output(target, "remote", "get-url", "origin")).casefold() != repository.casefold():
+        raise ValueError("Git origin does not match the configured repository")
+    if git_output(target, "rev-parse", "HEAD") != request["source"]["sha"]:
+        raise ValueError("request source SHA is stale for the target checkout")
+
+    policy_path = Path(args.policy or default_policy_path()).expanduser()
+    if policy_path.resolve() == target or target in policy_path.resolve().parents:
+        raise ValueError("operator policy must be stored outside the target repository")
+    policy, ticket_creators, _, policy_hash = load_policy(policy_path, repository)
+    if policy_hash != request["authorization"]["policy_sha256"]:
+        raise ValueError("request policy hash is stale; create a new ticket under the current policy")
+    if request["requested_by"]["login"].casefold() not in {name.casefold() for name in ticket_creators}:
+        raise ValueError("ticket creator is not authorized by the current operator policy")
+    _, _, approvers, limits, parent_number = admission_settings(policy, repository)
+    if request["issue"].get("parent_issue") != parent_number:
+        raise ValueError("request parent does not match the configured parent policy")
+    ttl = limits["max_request_lifetime_seconds"] if args.expires_seconds is None else args.expires_seconds
+    if type(ttl) is not int or ttl < 1 or ttl > limits["max_request_lifetime_seconds"]:
+        raise ValueError("requested expiry is outside the operator policy limit")
+    request_hash = canonical_hash(request)
+    if args.confirm_request_sha256 != request_hash:
+        raise ValueError(f"review request details, then repeat with --confirm-request-sha256 {request_hash}")
+
+    actor = gh_api("user")
+    if not isinstance(actor, dict) or not isinstance(actor.get("login"), str) or type(actor.get("id")) is not int:
+        raise ValueError("GitHub did not return an authenticated principal")
+    if actor["login"].casefold() not in {name.casefold() for name in approvers}:
+        raise ValueError("authenticated GitHub user is not in admission.approvers")
+    repo_data = gh_api(f"repos/{repository}")
+    if (not isinstance(repo_data, dict) or not isinstance(repo_data.get("full_name"), str)
+            or repo_data["full_name"].casefold() != repository.casefold()
+            or type(repo_data.get("id")) is not int or repo_data["id"] != request["repository"]["id"]):
+        raise ValueError("GitHub repository identity does not match the immutable request")
+    commit = gh_api(f"repos/{repository}/commits/{request['source']['sha']}")
+    if not isinstance(commit, dict) or commit.get("sha") != request["source"]["sha"]:
+        raise ValueError("pinned source commit is missing or changed in GitHub")
+    issue = gh_api(f"repos/{repository}/issues/{request['issue']['number']}")
+    expected_url = f"https://github.com/{repository}/issues/{request['issue']['number']}"
+    marker = f"<!-- orbit-request:v1 id={request['request_id']} source_sha={request['source']['sha']} policy_sha256={policy_hash} -->"
+    expected_body = rendered["body"] + f"\n\n{marker}\n"
+    issue_user = issue.get("user") if isinstance(issue, dict) else None
+    if (not isinstance(issue, dict) or type(issue.get("id")) is not int or issue["id"] != request["issue"]["id"]
+            or type(issue.get("number")) is not int or issue["number"] != request["issue"]["number"]
+            or issue.get("state") != "open" or "pull_request" in issue
+            or not isinstance(issue.get("html_url"), str) or issue["html_url"].casefold() != expected_url.casefold()
+            or not isinstance(issue_user, dict) or not isinstance(issue_user.get("login"), str)
+            or issue_user["login"].casefold() != request["requested_by"]["login"].casefold()
+            or type(issue_user.get("id")) is not int or issue_user["id"] != request["requested_by"]["id"]
+            or issue.get("body") != expected_body
+            or hashlib.sha256(expected_body.encode("utf-8")).hexdigest() != request["issue"]["body_sha256"]
+            or issue.get("created_at") != request.get("created_at")):
+        raise ValueError("live GitHub issue failed identity, state, creator, source, or body verification")
+    if parent_number is not None:
+        parent = gh_api(f"repos/{repository}/issues/{request['issue']['number']}/parent")
+        if not isinstance(parent, dict) or type(parent.get("number")) is not int or parent["number"] != parent_number:
+            raise ValueError("live GitHub issue parent does not match operator policy")
+
+    now = datetime.now(timezone.utc)
+    try:
+        ticket_created = datetime.fromisoformat(issue["created_at"].replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("live GitHub issue has an invalid creation timestamp") from exc
+    if ticket_created.tzinfo is None or (now - ticket_created).total_seconds() > limits["max_ticket_age_seconds"] or ticket_created > now + timedelta(minutes=5):
+        raise ValueError("GitHub ticket is stale or has a future creation timestamp")
+    admitted_at = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+    expires_at = (now + timedelta(seconds=ttl)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    receipt = {
+        "schema_version": 1,
+        "receipt_id": str(uuid.uuid4()),
+        "request_id": request["request_id"],
+        "state": "ADMITTED",
+        "request_sha256": request_hash,
+        "policy_sha256": policy_hash,
+        "repository": request["repository"],
+        "issue": request["issue"],
+        "source": request["source"],
+        "ticket": request["ticket"],
+        "scope": request["ticket"]["scope"],
+        "operation": "code_change",
+        "policy": {"sha256": policy_hash, "parent_issue": parent_number, "admission_limits": limits},
+        "admitted_by": {"login": actor["login"], "id": actor["id"]},
+        "admitted_at": admitted_at,
+        "expires_at": expires_at,
+    }
+    ledger_path = Path(args.ledger or default_ledger_path()).expanduser()
+    resolved_ledger = ledger_path.resolve()
+    if resolved_ledger == target or target in resolved_ledger.parents:
+        raise ValueError("admission ledger must be stored outside the target repository")
+    record_admission(receipt, ledger_path, limits)
+    return receipt
 
 
 def run_ticket_create(args):
@@ -300,6 +581,10 @@ def write_request(path_value, request):
 
 
 def run(args):
+    if args.command == "admit":
+        receipt = admit_request(args)
+        print(json.dumps(receipt, indent=2))
+        return
     if args.command == "ticket":
         request = run_ticket_create(args)
         if args.output:
@@ -352,7 +637,7 @@ def run(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="orbit", description="ORBIT standalone bootstrap (Phase 1)")
+    parser = argparse.ArgumentParser(prog="orbit", description="ORBIT bootstrap, ticket proposal, and admission CLI")
     sub = parser.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init")
     init.add_argument("--repo", required=True)
@@ -366,6 +651,13 @@ def main():
     create.add_argument("--request", required=True, help="versioned JSON task request")
     create.add_argument("--output")
     create.add_argument("--policy", help="operator policy JSON outside the target repository")
+    admit = sub.add_parser("admit", help="explicitly approve one verified request")
+    admit.add_argument("--target", required=True)
+    admit.add_argument("--request", required=True)
+    admit.add_argument("--policy", help="operator policy JSON outside the target repository")
+    admit.add_argument("--ledger", help="private SQLite admission ledger path")
+    admit.add_argument("--expires-seconds", type=int)
+    admit.add_argument("--confirm-request-sha256", help="reviewed canonical request hash; required to authorize")
     args = parser.parse_args()
     try:
         run(args)

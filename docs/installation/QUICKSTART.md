@@ -28,7 +28,17 @@ cat > ~/.config/orbit/policy.json <<'JSON'
   "repositories": {
     "owner/project": {
       "ticket_creators": ["your-github-login"],
-      "parent_issue": 12
+      "parent_issue": 12,
+      "admission": {
+        "approvers": ["your-github-login"],
+        "stop": false,
+        "limits": {
+          "admissions_per_day": 30,
+          "max_concurrent": 1,
+          "max_request_lifetime_seconds": 3600,
+          "max_ticket_age_seconds": 604800
+        }
+      }
     }
   }
 }
@@ -54,4 +64,22 @@ orbit ticket create \
   --output /tmp/orbit-request.json
 ```
 
-The target must be a Git checkout whose `origin` matches its configured GitHub repository. The command verifies the authenticated GitHub user, repository identity, ticket creator, issue body and operator-configured parent issue (when set), then records the current commit SHA and body hash. The policy file belongs to the operator, not the repository. It emits a `PROPOSED` request only. Ticket creation does not authorize execution, admit a job, or dispatch an agent. Admission is a separate later phase.
+The target must be a Git checkout whose `origin` matches its configured GitHub repository. The command verifies the authenticated GitHub user, repository identity, ticket creator, issue body and operator-configured parent issue (when set), then records the current commit SHA, complete ticket scope, and body hash. The policy file belongs to the operator, not the repository. It emits a `PROPOSED` request only. Ticket creation does not authorize execution, admit a job, or dispatch an agent.
+
+## Explicit admission (Phase 2)
+
+Configure the operator policy, including the admission approvers and limits, **before** creating the ticket. The policy hash is pinned into the ticket request; changing policy means creating a new request. Admission is allowed only when `stop` is explicitly `false`. The operator reviews the request JSON, then runs the command once to obtain its canonical hash and again with that exact hash:
+
+```bash
+# Prints a confirmation command and hash, but does not admit anything.
+orbit admit --target /path/to/project --request /tmp/orbit-request.json
+
+# Copy the hash from the message after reviewing the request details.
+orbit admit \
+  --target /path/to/project \
+  --request /tmp/orbit-request.json \
+  --confirm-request-sha256 <reviewed-request-hash> \
+  --expires-seconds 900
+```
+
+The command verifies the authenticated approver, exact repository and source commit, unchanged issue body and creator, current policy hash, ticket age, configured parent, STOP, UTC daily budget, concurrency, and confirmation hash. It records an `ADMITTED` receipt in a private SQLite audit file under the operator state directory. Admission is not execution; no worker is dispatched.
