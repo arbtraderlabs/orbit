@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from orbit import ledger
 from orbit import worker
+from orbit import delivery
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 DEFAULT = {"schema_version": 1, "repository": "", "agent": {"builder": "unconfigured", "reviewer": "human"}, "limits": {"admissions_per_day": 30, "worker_attempts_per_day": 30, "max_concurrent": 1, "max_seconds_per_attempt": 600, "max_retries": 2}, "safety": {"stop": True, "auto_merge": False, "allow_deploy": False, "allow_destructive_cleanup": False}, "delivery": {"pull_request": "draft"}}
@@ -445,6 +446,7 @@ def admit_request(args):
         "policy_sha256": policy_hash,
         "repository": request["repository"],
         "issue": request["issue"],
+        "requested_by": request["requested_by"],
         "source": request["source"],
         "ticket": request["ticket"],
         "scope": request["ticket"]["scope"],
@@ -705,6 +707,100 @@ def run_worker(args):
         connection.close()
 
 
+def request_admission(connection, request_id):
+    row = connection.execute("SELECT receipt_json FROM admissions WHERE request_id = ?", (request_id,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def policy_for_reporting(args, repository):
+    policy_path = Path(args.policy or default_policy_path()).expanduser()
+    if policy_path.resolve() == target_path(args.target) or target_path(args.target) in policy_path.resolve().parents:
+        raise ValueError("operator policy must be stored outside the target repository")
+    policy, _, _, policy_hash = load_policy(policy_path, repository)
+    _, _, approvers, _, _ = admission_settings(policy, repository, allow_stopped=True)
+    actor = gh_api("user")
+    if not isinstance(actor, dict) or not isinstance(actor.get("login"), str) or type(actor.get("id")) is not int:
+        raise ValueError("GitHub did not return an authenticated principal")
+    if actor["login"].casefold() not in {name.casefold() for name in approvers}:
+        raise ValueError("authenticated GitHub user is not an operator reporting approver")
+    return policy_path, policy, policy_hash, approvers, actor
+
+
+def run_review_accept(args):
+    _, repository, current_policy_hash, _ = queue_target_policy(args, allow_stopped=True)
+    _, _, policy_hash, _, actor = policy_for_reporting(args, repository)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        admission = request_admission(connection, args.request_id)
+        if admission is None or admission["repository"]["full_name"].casefold() != repository.casefold():
+            raise ValueError("request has no admission for the configured repository")
+        if admission.get("policy_sha256") != current_policy_hash or policy_hash != current_policy_hash:
+            raise ValueError("operator policy changed after admission; create a new request")
+        review, review_hash = delivery.accept_review(
+            connection, args.request_id, actor["login"], actor["id"], args.notes or "", args.confirm_diff_sha256,
+        )
+        return {"review": review, "review_sha256": review_hash}
+    finally:
+        connection.close()
+
+
+def run_report_status(args):
+    target, repository, _, _ = queue_target_policy(args, allow_stopped=True)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        request = None
+        request_id = args.request_id
+        if args.request:
+            request, _ = load_request(args.request)
+            if request["repository"]["full_name"].casefold() != repository.casefold():
+                raise ValueError("request does not match target repository")
+            if request_id and request_id != request["request_id"]:
+                raise ValueError("request ID does not match request file")
+            request_id = request["request_id"]
+        if not request_id:
+            raise ValueError("provide --request or --request-id")
+        admission = request_admission(connection, request_id)
+        if admission:
+            if admission["repository"]["full_name"].casefold() != repository.casefold():
+                raise ValueError("request belongs to another repository")
+            issue_number = admission["issue"]["number"]
+        elif request:
+            issue_number = request["issue"]["number"]
+        else:
+            raise ValueError("unadmitted PROPOSED status requires its request file")
+        snapshot = delivery.status_snapshot(connection, request_id)
+        if not args.publish:
+            return snapshot
+        if admission is None:
+            raise ValueError("publishing a status comment requires an admitted request")
+        _, _, current_policy_hash, _, actor = policy_for_reporting(args, repository)
+        if admission.get("policy_sha256") != current_policy_hash:
+            raise ValueError("operator policy changed after admission; status is available locally only")
+        marker, body = delivery.status_comment(snapshot)
+        result = delivery.publish_status(gh_api, repository, issue_number, marker, body)
+        return {"status": snapshot, "published_by": actor["login"], **result}
+    finally:
+        connection.close()
+
+
+def run_deliver_pr(args):
+    target, repository, initial_policy_hash, _ = queue_target_policy(args, allow_stopped=True)
+    _, _, current_policy_hash, _, actor = policy_for_reporting(args, repository)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        admission = request_admission(connection, args.request_id)
+        if admission is None or admission["repository"]["full_name"].casefold() != repository.casefold():
+            raise ValueError("request has no admission for the configured repository")
+        if admission.get("policy_sha256") != current_policy_hash or current_policy_hash != initial_policy_hash:
+            raise ValueError("operator policy changed after admission; draft PR delivery is blocked")
+        result = delivery.create_draft_pr(
+            gh_api, connection, args.request_id, args.head, args.base, args.confirm_review_sha256, actor["login"],
+        )
+        return {**result, "created_by": actor["login"]}
+    finally:
+        connection.close()
+
+
 def log_failed_validation(args, reason):
     try:
         request = json.loads(Path(args.request).expanduser().read_text(encoding="utf-8"))
@@ -751,6 +847,18 @@ def run(args):
         return
     if args.command == "worker":
         result = run_worker(args)
+        print(json.dumps(result, indent=2))
+        return
+    if args.command == "review":
+        result = run_review_accept(args)
+        print(json.dumps(result, indent=2))
+        return
+    if args.command == "report":
+        result = run_report_status(args)
+        print(json.dumps(result, indent=2))
+        return
+    if args.command == "deliver":
+        result = run_deliver_pr(args)
         print(json.dumps(result, indent=2))
         return
     target = target_path(args.target)
@@ -851,6 +959,34 @@ def main():
     worker_parser.add_argument("--command-json", required=True, help="private JSON argv array; no shell")
     worker_parser.add_argument("--test-command-json", required=True, help="private JSON argv array for acceptance tests")
     worker_parser.add_argument("--lease-seconds", type=int, default=60)
+    review = sub.add_parser("review", help="record a separate authenticated acceptance review")
+    review_commands = review.add_subparsers(dest="review_command", required=True)
+    accept = review_commands.add_parser("accept", help="accept an exact successful worker diff")
+    accept.add_argument("--target", required=True)
+    accept.add_argument("--policy")
+    accept.add_argument("--ledger")
+    accept.add_argument("--request-id", required=True)
+    accept.add_argument("--confirm-diff-sha256", required=True)
+    accept.add_argument("--notes", default="")
+    report = sub.add_parser("report", help="inspect or publish a request status")
+    report_commands = report.add_subparsers(dest="report_command", required=True)
+    report_status = report_commands.add_parser("status", help="report distinct governance stages")
+    report_status.add_argument("--target", required=True)
+    report_status.add_argument("--policy")
+    report_status.add_argument("--ledger")
+    report_status.add_argument("--request")
+    report_status.add_argument("--request-id")
+    report_status.add_argument("--publish", action="store_true", help="upsert an informational GitHub issue comment")
+    deliver = sub.add_parser("deliver", help="create a draft PR after independent acceptance")
+    deliver_commands = deliver.add_subparsers(dest="deliver_command", required=True)
+    create_pr = deliver_commands.add_parser("create-pr", help="verify accepted remote files and open a draft PR")
+    create_pr.add_argument("--target", required=True)
+    create_pr.add_argument("--policy")
+    create_pr.add_argument("--ledger")
+    create_pr.add_argument("--request-id", required=True)
+    create_pr.add_argument("--head", required=True, help="already-pushed branch containing the accepted worker diff")
+    create_pr.add_argument("--base", required=True, help="target branch that is an ancestor of pinned source")
+    create_pr.add_argument("--confirm-review-sha256", required=True)
     args = parser.parse_args()
     try:
         run(args)

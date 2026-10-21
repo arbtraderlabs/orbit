@@ -18,7 +18,7 @@
 ---
 
 > [!IMPORTANT]
-> **ORBIT is an early-stage, standalone framework.** The bootstrap CLI, authenticated ticket generator and explicit admission gate are under review; durable worker execution, independent review, scheduling and PR delivery remain planned. The diagrams below describe the intended experience, not current runtime capabilities. It grew out of lessons from a separately governed, single-worker CrashDash pilot.
+> **ORBIT is an early-stage, standalone framework.** Draft PRs now cover bootstrap, authenticated ticket creation and admission, a durable queue, a bounded local worker, separate human acceptance, status reporting and gated draft PR delivery. They are not merged or released; scheduling and independent AI review remain planned. The diagrams below describe the intended experience, not the released runtime. ORBIT grew out of lessons from a separately governed, single-worker CrashDash pilot.
 
 ## The problem
 
@@ -224,7 +224,7 @@ An initial MVP could use a Python CLI, SQLite queue, one repository, one worker 
 | Stage | Goal | Status |
 | --- | --- | --- |
 | 🌱 **00 — Define** | Public problem statement, architecture and example workflows | **Here now** |
-| 🧪 **01 — Prove** | One GitHub task → local worker → tests → independent review → receipt | Planned |
+| 🧪 **01 — Prove** | One GitHub task → local worker → tests → independent review → receipt | In review |
 | 🔒 **02 — Harden** | Authenticated authorisation, durable retries, budgets and STOP | Planned |
 | 🌙 **03 — Schedule** | Operator-defined peak/off-peak execution windows | Planned |
 | 👥 **04 — Scale** | Multiple worker roles and isolated concurrent workspaces | Future |
@@ -234,9 +234,9 @@ An initial MVP could use a Python CLI, SQLite queue, one repository, one worker 
 
 ## What ORBIT is (and isn't)
 
-✅ A standalone Python bootstrap CLI, proposed authenticated GitHub ticket generation and an explicit operator admission gate, alongside a design for **agent orchestration**, **independent AI code review**, **human-in-the-loop automation** and **GitHub-driven development**.
+✅ A standalone Python CLI with draft implementations for authenticated GitHub tickets, explicit admission, a bounded local worker, independent human acceptance and gated draft PR delivery; the larger product includes a design for **agent orchestration**, **independent AI code review**, **human-in-the-loop automation** and **GitHub-driven development**.
 
-❌ Not an autonomous worker, production deployer, guarantee of code correctness, or replacement for professional security review. Issue creation does not authorize or dispatch a job.
+❌ Not an unattended autonomous worker, production deployer, guarantee of code correctness, or replacement for professional security review. Issue creation does not authorize or dispatch a job.
 
 ## Get involved
 

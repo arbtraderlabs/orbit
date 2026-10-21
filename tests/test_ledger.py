@@ -37,6 +37,8 @@ class QueueLedgerTests(unittest.TestCase):
             "issue": {"id": issue_id, "number": issue_number},
             "source": {"sha": "a" * 40},
             "policy_sha256": "b" * 64,
+            "request_sha256": "c" * 64,
+            "admitted_by": {"login": "approver", "id": 2},
             "policy": {"admission_limits": self.limits},
             "admitted_at": ledger.iso(self.now),
             "expires_at": ledger.iso(expires or self.now + timedelta(hours=1)),

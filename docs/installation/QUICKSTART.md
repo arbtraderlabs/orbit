@@ -123,3 +123,37 @@ orbit worker run \
 ```
 
 The subprocess environment contains a temporary HOME and a small allowlist; the operator's credentials and environment variables are not inherited. The command still runs as the current OS user and this is not an OS sandbox. Use only an operator-trusted executable. STOP or a policy change terminates the process group; a failed test is retryable within policy, while an out-of-scope diff is blocked. Each attempt is limited to 20 MiB of combined command output and 100 MiB of collected diff evidence. The receipt stores hashes instead of stdout/stderr content; those streams are retained in the private worker evidence directory.
+
+## Independent review, status reporting, and draft PR delivery
+
+Ticket creation remains `PROPOSED`; admission records `AUTHORISED` and `ADMITTED`; queue execution records `RUNNING` and `DONE`. A worker cannot mark a request `ACCEPTED`. Inspect local status at any point:
+
+```bash
+orbit report status --target /path/to/project --request /tmp/orbit-request.json
+orbit report status --target /path/to/project --request-id <request-id> --publish
+```
+
+Publishing an issue comment requires an authenticated operator in `admission.approvers`; repeated publication updates the same marked comment and reconciles an API timeout. Status comments are informational.
+
+After a successful worker attempt, an independent operator reviews its retained worktree and diff. The reviewer must be an authenticated approver different from the ticket creator and admission approver, and confirms the exact `diff_sha256` printed in the worker receipt:
+
+```bash
+orbit review accept \
+  --target /path/to/project \
+  --request-id <request-id> \
+  --confirm-diff-sha256 <reviewed-diff-sha256> \
+  --notes "Acceptance evidence reviewed"
+```
+
+To deliver, the same reviewer creates and pushes a branch containing exactly the accepted worker files from the retained worktree. ORBIT verifies the authenticated reviewer identity, branch against the pinned source, accepted per-file hashes, and a base branch ancestral to the source, then requires the review receipt hash and creates a draft PR. It never commits or pushes the worktree automatically:
+
+```bash
+orbit deliver create-pr \
+  --target /path/to/project \
+  --request-id <request-id> \
+  --head orbit/<request-id> \
+  --base main \
+  --confirm-review-sha256 <review-receipt-sha256>
+```
+
+Draft PR creation is idempotent and verifies/reconciles the GitHub result. A worker result, ticket, status comment, or test pass alone cannot create a PR or mark work `ACCEPTED`. No merge or deployment is performed.

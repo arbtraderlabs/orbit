@@ -19,7 +19,9 @@
 ## Phase 3 — durable worker
 `#4` adds the SQLite job/attempt/event ledger, atomic admission-to-queue insertion, idempotent per-worker claims, bounded renewable leases, UTC attempt budgets, retries, expiry recovery, and separate validation counts. An expired lease is recovered the next time a claim is requested.
 
-`#5` adds an explicit argv-only builder/test runner in a detached worktree at the pinned source SHA, temporary HOME/minimal environment, periodic policy/lease checks, runtime deadline, allowed-path enforcement, and private hashed evidence receipts. It retains worktrees and never cleans the target. The process still runs as the operator's OS user; this is not an OS sandbox. Remaining: independent review, change evidence presentation, draft PR delivery and a live disposable-repository rehearsal. Do not enable execution for untrusted binaries.
+`#5` adds an explicit argv-only builder/test runner in a detached worktree at the pinned source SHA, temporary HOME/minimal environment, periodic policy/lease checks, runtime deadline, allowed-path enforcement, and private hashed evidence receipts. It retains worktrees and never cleans the target. The process still runs as the operator's OS user; this is not an OS sandbox.
+
+`#6` adds distinct AUTHORISED/ADMITTED/RUNNING/DONE/ACCEPTED reporting, authenticated independent acceptance bound to exact diff and receipt hashes, idempotent issue status comments, and draft PR creation only after acceptance and remote file verification. ORBIT does not commit or push the worker worktree. Remaining: independent model review, live disposable-repository rehearsal, and richer evidence browsing. Do not enable execution for untrusted binaries.
 
 ## Phase 4 — hardening and launch
 Negative security tests, host reboot recovery, observability, installer, troubleshooting, upgrade/rollback, demonstration and public release. Do not claim production readiness without independent evidence.
