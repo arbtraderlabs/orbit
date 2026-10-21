@@ -23,8 +23,10 @@
 
 `#6` adds distinct AUTHORISED/ADMITTED/RUNNING/DONE/ACCEPTED reporting, authenticated independent acceptance bound to exact diff and receipt hashes, idempotent issue status comments, and draft PR creation only after acceptance and remote file verification. ORBIT does not commit or push the worker worktree. Remaining: independent model review, live disposable-repository rehearsal, and richer evidence browsing. Do not enable execution for untrusted binaries.
 
+`#7` live GitHub pilot is not yet run. This session has no authenticated shell `gh` session and no approved disposable repository to use. Do not create credentials or use the production repository as a pilot; run the documented pilot only when an operator supplies an approved disposable repo and existing least-privilege authentication.
+
 ## Phase 4 — hardening and launch
-Negative security tests, host reboot recovery, observability, installer, troubleshooting, upgrade/rollback, demonstration and public release. Do not claim production readiness without independent evidence.
+`#8` adds security/permission guidance, troubleshooting, upgrade/rollback instructions, a local one-minute demo, and an intentionally unchecked release checklist. Remaining: negative security review, host reboot recovery, observability, installer validation, and the #7 live pilot. The checklist is not release authorization; do not merge or publish a release without explicit operator approval and independent evidence.
 
 ## V2 — independent review
 Codex reads immutable builder evidence; review PASS/FAIL/UNKNOWN; corrective task roundtrip to builder; maximum two corrections by default; human+ChatGPT final review. No model self-approval or auto-merge.

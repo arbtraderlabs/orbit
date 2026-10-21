@@ -1,6 +1,8 @@
-# ORBIT Bootstrap and Ticket Generator Quickstart
+# ORBIT Operator Quickstart
 
-Requirements: Python 3.11+, Git; GitHub CLI is required only for authenticated ticket creation. No CrashDash dependency.
+Requirements: Python 3.11+, Git. The GitHub CLI is required for authenticated ticket, admission, review, status publishing, and draft PR operations; local bootstrap and tests need no GitHub credentials. No CrashDash dependency.
+
+Before enabling GitHub or worker operations, read [Security and Permissions](SECURITY_AND_PERMISSIONS.md). For errors see [Troubleshooting](../operations/TROUBLESHOOTING.md); back up state with [Upgrade and Rollback](../operations/UPGRADE_ROLLBACK.md).
 
 From ORBIT checkout:
 
