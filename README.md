@@ -20,6 +20,8 @@
 > [!IMPORTANT]
 > **ORBIT is an early-stage, standalone framework.** Draft PRs now cover bootstrap, authenticated ticket creation and admission, a durable queue, a bounded local worker, separate human acceptance, status reporting and gated draft PR delivery. They are not merged or released; scheduling and independent AI review remain planned. The diagrams below describe the intended experience, not the released runtime. ORBIT grew out of lessons from a separately governed, single-worker CrashDash pilot.
 
+**Operator docs:** [Quickstart](docs/installation/QUICKSTART.md) · [Security and permissions](docs/installation/SECURITY_AND_PERMISSIONS.md) · [One-minute local demo](docs/installation/ONE_MINUTE_DEMO.md) · [Troubleshooting](docs/operations/TROUBLESHOOTING.md) · [Upgrade and rollback](docs/operations/UPGRADE_ROLLBACK.md) · [Release readiness](docs/operations/RELEASE_CHECKLIST.md)
+
 ## The problem
 
 You've already written a solid specification with a capable AI. Now you hand the implementation to a smaller, cheaper local model.
@@ -224,8 +226,8 @@ An initial MVP could use a Python CLI, SQLite queue, one repository, one worker 
 | Stage | Goal | Status |
 | --- | --- | --- |
 | 🌱 **00 — Define** | Public problem statement, architecture and example workflows | **Here now** |
-| 🧪 **01 — Prove** | One GitHub task → local worker → tests → independent review → receipt | In review |
-| 🔒 **02 — Harden** | Authenticated authorisation, durable retries, budgets and STOP | Planned |
+| 🧪 **01 — Prove** | One GitHub task → local worker → tests → independent review → receipt | Code under review; live pilot pending |
+| 🔒 **02 — Harden** | Authenticated authorisation, durable retries, budgets and STOP | Code under review; pilot pending |
 | 🌙 **03 — Schedule** | Operator-defined peak/off-peak execution windows | Planned |
 | 👥 **04 — Scale** | Multiple worker roles and isolated concurrent workspaces | Future |
 | 📦 **05 — Share** | Installer, setup wizard, provider adapters and documentation | Future |
