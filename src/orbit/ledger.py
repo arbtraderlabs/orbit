@@ -78,6 +78,24 @@ def initialize(connection):
         outcome TEXT NOT NULL,
         reason TEXT NOT NULL
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS reviews (
+        request_id TEXT PRIMARY KEY,
+        diff_sha256 TEXT NOT NULL,
+        review_sha256 TEXT NOT NULL UNIQUE,
+        reviewed_by TEXT NOT NULL,
+        reviewed_at TEXT NOT NULL,
+        receipt_json TEXT NOT NULL
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS deliveries (
+        request_id TEXT PRIMARY KEY,
+        head_ref TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        head_sha TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        pr_url TEXT NOT NULL,
+        marker TEXT NOT NULL,
+        delivered_at TEXT NOT NULL
+    )""")
 
 
 def enqueue_admitted(connection, receipt):
@@ -87,6 +105,8 @@ def enqueue_admitted(connection, receipt):
         "INSERT INTO jobs (request_id, repository_id, issue_id, issue_number, source_sha, status, queued_at, receipt_json) VALUES (?, ?, ?, ?, ?, 'QUEUED', ?, ?)",
         (request_id, receipt["repository"]["id"], receipt["issue"]["id"], receipt["issue"]["number"], receipt["source"]["sha"], queued_at, json.dumps(receipt, sort_keys=True)),
     )
+    _event(connection, request_id, queued_at, "PROPOSED", "AUTHORISED", "orbit-approval", {"approved_by": receipt["admitted_by"]["login"], "request_sha256": receipt["request_sha256"]})
+    _event(connection, request_id, queued_at, "AUTHORISED", "ADMITTED", receipt["admitted_by"]["login"], {"receipt_id": receipt["receipt_id"]})
     _event(connection, request_id, queued_at, "ADMITTED", "QUEUED", "orbit-admission", {"receipt_id": receipt["receipt_id"]})
 
 

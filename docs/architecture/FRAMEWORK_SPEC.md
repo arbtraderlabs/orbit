@@ -23,8 +23,8 @@ Install into an unrelated GitHub repository and operate a governed, observable, 
 6. Dispatcher: implemented durable SQLite queue, per-repository claim limits, leases, retry caps, and expiry recovery; it exposes commands but does not autonomously dispatch.
 7. Builder adapter: implemented explicit argv-only builder and test commands in a pinned detached worktree, deadline, minimal environment, path-scope check, and hashed private evidence receipt. The process still runs as the operator's OS user; this is not an OS sandbox.
 8. Evidence: pinned commits, diff, test commands/results, provenance and content hashes.
-9. Review gate: V1 deterministic checks and human review; V2 independent Codex reviewer and bounded rework.
-10. Reporter: GitHub issue/PR updates and local status; never claim execution from ticket creation.
+9. Review gate: implemented separate authenticated operator acceptance tied to an exact worker diff; worker self-report cannot accept itself. V2 independent Codex reviewer and bounded rework remain planned.
+10. Reporter: implemented local stage reporting, idempotent GitHub issue status comments, and draft PR delivery only after accepted review and exact remote-file verification; never claim execution from ticket creation.
 
 ## End-to-end contract (future)
 PROPOSED -> AUTHORISED (trusted operator) -> ADMITTED (controller) -> RUNNING (agent) -> DONE (evidence committed) -> ACCEPTED (independent acceptance gate) -> draft PR -> human merge decision.

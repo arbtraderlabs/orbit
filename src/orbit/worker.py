@@ -169,6 +169,33 @@ def _diff_hash(worktree, paths):
     return digest.hexdigest()
 
 
+def _changed_file_evidence(worktree, paths):
+    object_format = _git(worktree, "rev-parse", "--show-object-format").stdout.decode().strip()
+    algorithm = "sha256" if object_format == "sha256" else "sha1"
+    files = {}
+    for name in paths:
+        path = Path(worktree, name)
+        if not path.exists() and not path.is_symlink():
+            files[name] = {"status": "removed", "blob_sha": None}
+            continue
+        if path.is_symlink():
+            content = os.readlink(path).encode("utf-8", errors="surrogateescape")
+            status = "symlink"
+        elif path.is_file():
+            if path.stat().st_size > 100 * 1024 * 1024:
+                raise ValueError("worker changed file exceeds the 100 MiB evidence limit")
+            content = path.read_bytes()
+            status = "present"
+        else:
+            files[name] = {"status": "nonfile", "blob_sha": None}
+            continue
+        blob = hashlib.new(algorithm)
+        blob.update(f"blob {len(content)}\0".encode())
+        blob.update(content)
+        files[name] = {"status": status, "blob_sha": blob.hexdigest()}
+    return files
+
+
 def _hash_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as stream:
@@ -310,6 +337,7 @@ def run_claimed_job(target, repository_id, repository, policy_path, policy_hash,
     paths = _changed_paths(worktree)
     out_of_scope = _within_scope(paths, allowed)
     diff_hash = _diff_hash(worktree, paths)
+    changed_files = _changed_file_evidence(worktree, paths)
     if out_of_scope:
         failure = "out-of-scope changes detected"
     ended_at = _iso_now()
@@ -329,6 +357,7 @@ def run_claimed_job(target, repository_id, repository, policy_path, policy_hash,
         "test_command_sha256": hashlib.sha256(json.dumps(test_command, separators=(",", ":")).encode()).hexdigest(),
         "commands": results,
         "changed_paths": paths,
+        "changed_files": changed_files,
         "out_of_scope_paths": out_of_scope,
         "diff_sha256": diff_hash,
         "outcome": "SUCCEEDED" if failure is None else "FAILED",

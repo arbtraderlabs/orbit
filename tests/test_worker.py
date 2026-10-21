@@ -124,6 +124,7 @@ class WorkerTests(unittest.TestCase):
                 "request_id": request_id, "receipt_id": "receipt", "state": "ADMITTED",
                 "repository": {"id": 77, "full_name": "example/project"},
                 "issue": {"id": 99, "number": 9}, "source": {"sha": source_sha},
+                "request_sha256": "f" * 64, "admitted_by": {"login": "operator", "id": 1},
                 "scope": {"allowed_paths": ["src/"], "prohibited_changes": ["credentials"]},
                 "policy_sha256": policy_hash, "policy": {"admission_limits": limits},
                 "admitted_at": ledger.iso(now), "expires_at": ledger.iso(now + timedelta(minutes=5)),
