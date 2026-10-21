@@ -204,7 +204,9 @@ def claim_next(connection, repository_id, worker_id, claim_key, policy_sha256, l
 
         attempt_no = selected[8] + 1
         lease_token = str(uuid.uuid4())
-        attempt_deadline = now_dt + timedelta(seconds=limits["max_seconds_per_attempt"])
+        receipt = json.loads(selected[14])
+        receipt_expiry = datetime.fromisoformat(receipt["expires_at"].replace("Z", "+00:00"))
+        attempt_deadline = min(now_dt + timedelta(seconds=limits["max_seconds_per_attempt"]), receipt_expiry)
         lease_expiry = min(now_dt + timedelta(seconds=lease_seconds), attempt_deadline)
         lease_expiry_text = iso(lease_expiry)
         deadline_text = iso(attempt_deadline)
@@ -237,7 +239,8 @@ def heartbeat(connection, request_id, lease_token, now=None, lease_seconds=60, p
             raise ValueError("lease is missing, expired, or no longer current")
         if policy_sha256 is not None and json.loads(row[3]).get("policy_sha256") != policy_sha256:
             raise ValueError("operator policy changed during the active attempt")
-        new_expiry = min(iso((now or utc_now()) + timedelta(seconds=lease_seconds)), row[1])
+        receipt_expiry = json.loads(row[3]).get("expires_at", row[1])
+        new_expiry = min(iso((now or utc_now()) + timedelta(seconds=lease_seconds)), row[1], receipt_expiry)
         connection.execute("UPDATE jobs SET lease_expires_at = ? WHERE request_id = ? AND lease_token = ?", (new_expiry, request_id, lease_token))
         connection.commit()
         return {"request_id": request_id, "lease_expires_at": new_expiry, "worker_id": row[2]}
@@ -246,27 +249,29 @@ def heartbeat(connection, request_id, lease_token, now=None, lease_seconds=60, p
         raise
 
 
-def finish_attempt(connection, request_id, lease_token, success, details=None, now=None, max_retries=0):
+def finish_attempt(connection, request_id, lease_token, success, details=None, now=None, max_retries=0, retryable=True):
     now_text = iso(now or utc_now())
     connection.execute("BEGIN IMMEDIATE")
     try:
         job = connection.execute("SELECT status, retries_used, lease_expires_at, attempt_deadline_at, receipt_json FROM jobs WHERE request_id = ? AND lease_token = ?", (request_id, lease_token)).fetchone()
         if not job or job[0] != "RUNNING" or job[2] <= now_text or job[3] <= now_text:
             raise ValueError("lease is missing, expired, or no longer current")
+        if json.loads(job[4]).get("expires_at", "") <= now_text:
+            raise ValueError("admission receipt expired during the worker attempt")
         if max_retries is None:
             max_retries = json.loads(job[4])["policy"]["admission_limits"]["max_retries"]
         if success:
             state = "DONE"
             retries_used = job[1]
             outcome = "SUCCEEDED"
-        elif job[1] < max_retries:
+        elif retryable and job[1] < max_retries:
             state = "QUEUED"
             retries_used = job[1] + 1
             outcome = "FAILED_RETRYABLE"
         else:
             state = "BLOCKED"
             retries_used = job[1]
-            outcome = "FAILED_EXHAUSTED"
+            outcome = "FAILED_EXHAUSTED" if retryable else "FAILED_BLOCKED"
         connection.execute("UPDATE attempts SET finished_at = ?, outcome = ?, details_json = ? WHERE request_id = ? AND lease_token = ? AND finished_at IS NULL", (now_text, outcome, json.dumps(details or {}, sort_keys=True), request_id, lease_token))
         connection.execute("UPDATE jobs SET status = ?, retries_used = ?, lease_token = NULL, lease_owner = NULL, lease_expires_at = NULL, attempt_deadline_at = NULL, failure_reason = ? WHERE request_id = ?", (state, retries_used, None if success else json.dumps(details or {}, sort_keys=True), request_id))
         _event(connection, request_id, now_text, "RUNNING", state, "worker-result", {"outcome": outcome, "details": details or {}})
