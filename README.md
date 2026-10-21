@@ -18,7 +18,7 @@
 ---
 
 > [!IMPORTANT]
-> **ORBIT is an early-stage, standalone project concept—not an installable, production-ready framework yet.** The diagrams, configuration and commands below describe the intended experience. They are not claims of implemented features. It grew out of lessons from a separately governed, single-worker CrashDash pilot.
+> **ORBIT is an early-stage, standalone framework.** The bootstrap CLI and authenticated ticket generator are under review; durable admission, worker execution, review, scheduling and delivery remain planned. The diagrams below describe the intended experience, not current runtime capabilities. It grew out of lessons from a separately governed, single-worker CrashDash pilot.
 
 ## The problem
 
@@ -177,7 +177,7 @@ No copy/paste relay. No invisible scope creep. No surprise deployment.
 A future guided setup would ask for **repository**, **agent CLI/model**, **task admission rule**, **autonomy level**, **workspace**, **budget/schedule**, and **GitHub reporting preferences**.
 
 ```yaml
-# Illustrative only — no ORBIT CLI/config schema is implemented yet.
+# Illustrative future product configuration; the Phase 1 config schema is narrower.
 repository: owner/project
 task_trigger: explicit_approval
 workers:
@@ -234,9 +234,9 @@ An initial MVP could use a Python CLI, SQLite queue, one repository, one worker 
 
 ## What ORBIT is (and isn't)
 
-✅ An idea for **agent orchestration**, **independent AI code review**, **human-in-the-loop automation**, **GitHub-driven development** and **local/low-cost LLM workflows**.
+✅ A standalone Python bootstrap CLI and a proposed authenticated GitHub ticket generator, alongside a design for **agent orchestration**, **independent AI code review**, **human-in-the-loop automation** and **GitHub-driven development**.
 
-❌ Not yet a downloadable tool, autonomous production deployer, guarantee of code correctness, or replacement for professional security review.
+❌ Not an autonomous worker, production deployer, guarantee of code correctness, or replacement for professional security review. Issue creation does not authorize or dispatch a job.
 
 ## Get involved
 

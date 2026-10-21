@@ -23,4 +23,13 @@ body:
   - type: textarea
     id: dependencies
     attributes:
-      label: Dependencies and escalation boundaries
+      label: Dependencies
+    validations:
+      required: true
+  - type: textarea
+    id: escalation
+    attributes:
+      label: Additional escalation boundaries
+      description: Actions that require operator review before proceeding.
+    validations:
+      required: true

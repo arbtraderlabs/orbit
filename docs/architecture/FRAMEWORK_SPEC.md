@@ -14,7 +14,7 @@ Install into an unrelated GitHub repository and operate a governed, observable, 
 - Reject stale policy, changed issue body, wrong source SHA, missing real parent relationship when configured, expired receipt, duplicate request, STOP, budget and concurrent execution limit.
 
 ## Components
-1. CLI: init, doctor, validate; no agent execution in Phase 1.
+1. CLI: init, doctor and validate in Phase 1; authenticated ticket creation in Phase 2. Ticket creation does not admit or execute work.
 2. Config: repository-independent orbit.json (versioned, schema-validated).
 3. GitHub adapter: issues, authenticated receipts, PRs, status comments; least privilege.
 4. Admission: policy + immutable request envelope + identity and receipt verification.

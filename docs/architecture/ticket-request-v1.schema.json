@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/arbtraderlabs/orbit/blob/main/docs/architecture/ticket-request-v1.schema.json",
+  "title": "ORBIT Ticket Request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "title",
+    "objective",
+    "scope",
+    "acceptance_tests",
+    "dependencies",
+    "escalation_boundaries"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "title": {"type": "string", "minLength": 1, "maxLength": 256},
+    "objective": {"type": "string", "minLength": 1},
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_paths", "prohibited_changes"],
+      "properties": {
+        "allowed_paths": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "prohibited_changes": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "acceptance_tests": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "dependencies": {"type": "string"},
+    "escalation_boundaries": {"type": "string", "minLength": 1}
+  }
+}
