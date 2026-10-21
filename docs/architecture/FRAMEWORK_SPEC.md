@@ -20,8 +20,8 @@ Install into an unrelated GitHub repository and operate a governed, observable, 
 3. GitHub adapter: issues, authenticated receipts, PRs, status comments; least privilege.
 4. Admission: policy + immutable request envelope + live GitHub identity/body/source verification; write ADMITTED receipts to a private local audit ledger.
 5. SQLite ledger: jobs, transitions, attempts, idempotency keys, budget accounting, receipts and errors.
-6. Dispatcher: durable queue and single-flight lease with crash recovery.
-7. Builder adapter: bounded local command invocation, timeout, allowed worktree, no inherited secrets by default.
+6. Dispatcher: implemented durable SQLite queue, per-repository claim limits, leases, retry caps, and expiry recovery; it exposes commands but does not autonomously dispatch.
+7. Builder adapter: implemented explicit argv-only builder and test commands in a pinned detached worktree, deadline, minimal environment, path-scope check, and hashed private evidence receipt. The process still runs as the operator's OS user; this is not an OS sandbox.
 8. Evidence: pinned commits, diff, test commands/results, provenance and content hashes.
 9. Review gate: V1 deterministic checks and human review; V2 independent Codex reviewer and bounded rework.
 10. Reporter: GitHub issue/PR updates and local status; never claim execution from ticket creation.

@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from orbit import ledger
+from orbit import worker
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 DEFAULT = {"schema_version": 1, "repository": "", "agent": {"builder": "unconfigured", "reviewer": "human"}, "limits": {"admissions_per_day": 30, "worker_attempts_per_day": 30, "max_concurrent": 1, "max_seconds_per_attempt": 600, "max_retries": 2}, "safety": {"stop": True, "auto_merge": False, "allow_deploy": False, "allow_destructive_cleanup": False}, "delivery": {"pull_request": "draft"}}
@@ -669,6 +670,41 @@ def queue_finish(args):
         connection.close()
 
 
+def run_worker(args):
+    _, repository, policy_hash, limits = queue_target_policy(args)
+    command = worker.load_argv(args.command_json)
+    test_command = worker.load_argv(args.test_command_json)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        repository_id = repository_id_from_ledger(connection, repository)
+        if repository_id is None:
+            return None
+        claim = ledger.claim_next(
+            connection, repository_id, args.worker_id, args.claim_key, policy_hash,
+            limits, stop=False, lease_seconds=min(args.lease_seconds, limits["max_seconds_per_attempt"]),
+        )
+        if claim is None:
+            return None
+        state_home = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state") / "orbit" / "worker"
+        try:
+            return worker.run_claimed_job(
+                target_path(args.target), repository_id, repository,
+                Path(args.policy or default_policy_path()).expanduser(), policy_hash,
+                limits, connection, claim, command, test_command, state_home,
+            )
+        except Exception as exc:
+            try:
+                ledger.finish_attempt(
+                    connection, claim["job_id"], claim["lease_token"], False,
+                    details={"failure_reason": str(exc), "worker_setup_failed": True}, max_retries=None, retryable=False,
+                )
+            except Exception:
+                pass
+            raise ValueError(f"worker attempt blocked before completion: {exc}") from exc
+    finally:
+        connection.close()
+
+
 def log_failed_validation(args, reason):
     try:
         request = json.loads(Path(args.request).expanduser().read_text(encoding="utf-8"))
@@ -711,6 +747,10 @@ def run(args):
             result = queue_heartbeat(args)
         else:
             result = queue_finish(args)
+        print(json.dumps(result, indent=2))
+        return
+    if args.command == "worker":
+        result = run_worker(args)
         print(json.dumps(result, indent=2))
         return
     target = target_path(args.target)
@@ -802,6 +842,15 @@ def main():
     finish.add_argument("--lease-token", required=True)
     finish.add_argument("--outcome", choices=("succeeded", "failed"), required=True)
     finish.add_argument("--summary")
+    worker_parser = sub.add_parser("worker", help="run one explicitly claimed job in an isolated worktree")
+    worker_parser.add_argument("--target", required=True)
+    worker_parser.add_argument("--policy")
+    worker_parser.add_argument("--ledger")
+    worker_parser.add_argument("--worker-id", required=True)
+    worker_parser.add_argument("--claim-key", required=True)
+    worker_parser.add_argument("--command-json", required=True, help="private JSON argv array; no shell")
+    worker_parser.add_argument("--test-command-json", required=True, help="private JSON argv array for acceptance tests")
+    worker_parser.add_argument("--lease-seconds", type=int, default=60)
     args = parser.parse_args()
     try:
         run(args)
