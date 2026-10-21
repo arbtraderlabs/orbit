@@ -17,7 +17,9 @@
 `#2` creates a versioned, pinned PROPOSED request through an authenticated `gh api` principal, after checking an operator-owned policy file outside the target checkout. It verifies repository identity, Git origin, issue creator/body and optional native sub-issue parent; the request carries the scoped ticket, source SHA and policy/body hashes. `#3` requires an allowlisted authenticated approver and typed canonical request hash, re-verifies the live issue and source commit, rejects stale requests/policy, checks STOP, UTC admission budget, concurrency and expiry, then records an ADMITTED receipt in a private local SQLite audit ledger. Neither step dispatches a worker.
 
 ## Phase 3 — durable worker
-SQLite ledger, queue leases, agent adapters, worktree isolation, timeout, STOP, budgets, retries, crash recovery, diff/test evidence, draft PR. Test with a totally unrelated disposable GitHub repo; verify issue -> authorised -> admitted -> worker -> commit -> draft PR.
+`#4` adds the SQLite job/attempt/event ledger, atomic admission-to-queue insertion, idempotent per-worker claims, bounded renewable leases, UTC attempt budgets, retries, expiry recovery, and separate validation counts. The `orbit queue` commands expose status and lease operations only; they do not launch agents or run repository code. An expired lease is recovered the next time a claim is requested.
+
+Remaining: agent adapters, isolated worktrees, enforced subprocess timeout, diff/test evidence and draft PR delivery. Test with a totally unrelated disposable GitHub repo before enabling any worker; verify issue -> authorised -> admitted -> worker -> commit -> draft PR.
 
 ## Phase 4 — hardening and launch
 Negative security tests, host reboot recovery, observability, installer, troubleshooting, upgrade/rollback, demonstration and public release. Do not claim production readiness without independent evidence.

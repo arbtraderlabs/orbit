@@ -34,7 +34,10 @@ cat > ~/.config/orbit/policy.json <<'JSON'
         "stop": false,
         "limits": {
           "admissions_per_day": 30,
+          "worker_attempts_per_day": 30,
           "max_concurrent": 1,
+          "max_seconds_per_attempt": 600,
+          "max_retries": 2,
           "max_request_lifetime_seconds": 3600,
           "max_ticket_age_seconds": 604800
         }
@@ -83,3 +86,16 @@ orbit admit \
 ```
 
 The command verifies the authenticated approver, exact repository and source commit, unchanged issue body and creator, current policy hash, ticket age, configured parent, STOP, UTC daily budget, concurrency, and confirmation hash. It records an `ADMITTED` receipt in a private SQLite audit file under the operator state directory. Admission is not execution; no worker is dispatched.
+
+## Inspect and lease admitted work (Phase 3 foundation)
+
+The durable queue records admitted receipts, attempts, state transitions, UTC worker-attempt budgets, and private lease tokens in the same SQLite ledger. It exposes lease operations for a future worker adapter; these commands do not launch an agent or run repository code.
+
+```bash
+orbit queue status --target /path/to/project
+orbit queue claim --target /path/to/project --worker-id local-worker --claim-key <stable-unique-key>
+orbit queue heartbeat --target /path/to/project --request-id <request-id> --lease-token <lease-token>
+orbit queue finish --target /path/to/project --request-id <request-id> --lease-token <lease-token> --outcome succeeded --summary "evidence reference"
+```
+
+Claims are idempotent for the same worker and stable claim key while the lease is live. Lease expiry is recoverable on the next claim; retries and attempt duration are bounded by the admission policy pinned in the receipt. STOP prevents new claims and lease heartbeats. A worker may still record a completed attempt while STOP is active. `queue status` reports admissions, job states, attempt outcomes, and rejected admission validations separately.

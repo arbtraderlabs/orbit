@@ -12,6 +12,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from orbit import ledger
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 DEFAULT = {"schema_version": 1, "repository": "", "agent": {"builder": "unconfigured", "reviewer": "human"}, "limits": {"admissions_per_day": 30, "worker_attempts_per_day": 30, "max_concurrent": 1, "max_seconds_per_attempt": 600, "max_retries": 2}, "safety": {"stop": True, "auto_merge": False, "allow_deploy": False, "allow_destructive_cleanup": False}, "delivery": {"pull_request": "draft"}}
@@ -257,7 +258,7 @@ def load_request(path_value):
     return request, rendered
 
 
-def admission_settings(policy, repository):
+def admission_settings(policy, repository, allow_stopped=False):
     repositories = policy.get("repositories")
     matching = [value for name, value in repositories.items() if isinstance(name, str) and name.casefold() == repository.casefold()]
     if len(matching) != 1 or not isinstance(matching[0], dict):
@@ -271,17 +272,23 @@ def admission_settings(policy, repository):
     approvers = admission.get("approvers")
     if not isinstance(approvers, list) or any(not isinstance(name, str) or not name.strip() for name in approvers):
         raise ValueError("operator policy admission.approvers must be a list of GitHub logins")
-    if admission.get("stop", True) is not False:
+    stop = admission.get("stop", True)
+    if type(stop) is not bool:
+        raise ValueError("operator policy admission.stop must be a boolean")
+    if stop and not allow_stopped:
         raise ValueError("admission is stopped by operator policy")
     limits = admission.get("limits")
     if not isinstance(limits, dict):
         raise ValueError("operator policy admission.limits is required")
-    expected_limits = {"admissions_per_day", "max_concurrent", "max_request_lifetime_seconds", "max_ticket_age_seconds"}
+    expected_limits = {
+        "admissions_per_day", "worker_attempts_per_day", "max_concurrent",
+        "max_seconds_per_attempt", "max_retries", "max_request_lifetime_seconds", "max_ticket_age_seconds",
+    }
     if set(limits) != expected_limits:
         raise ValueError("operator policy admission limits do not match schema version 1")
     for name in expected_limits:
         value = limits.get(name)
-        if type(value) is not int or value < 1:
+        if type(value) is not int or value < (0 if name == "max_retries" else 1):
             raise ValueError(f"invalid operator policy admission.limits.{name}")
     parent = entry.get("parent_issue")
     if parent is not None and (type(parent) is not int or parent < 1):
@@ -320,20 +327,7 @@ def record_admission(receipt, ledger_path, limits):
     except sqlite3.Error as exc:
         raise ValueError(f"could not open admission ledger: {exc}") from exc
     try:
-        connection.execute("PRAGMA synchronous=FULL")
-        connection.execute("""CREATE TABLE IF NOT EXISTS admissions (
-            request_id TEXT PRIMARY KEY,
-            repository_id INTEGER NOT NULL,
-            issue_id INTEGER NOT NULL,
-            issue_number INTEGER NOT NULL,
-            request_sha256 TEXT NOT NULL,
-            policy_sha256 TEXT NOT NULL,
-            admitted_by TEXT NOT NULL,
-            admitted_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            receipt_json TEXT NOT NULL,
-            UNIQUE(repository_id, issue_id)
-        )""")
+        ledger.initialize(connection)
         connection.execute("BEGIN IMMEDIATE")
         now = receipt["admitted_at"]
         utc_day = now[:10]
@@ -348,6 +342,7 @@ def record_admission(receipt, ledger_path, limits):
             "INSERT INTO admissions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (receipt["request_id"], receipt["repository"]["id"], receipt["issue"]["id"], receipt["issue"]["number"], receipt["request_sha256"], receipt["policy_sha256"], receipt["admitted_by"]["login"], now, receipt["expires_at"], json.dumps(receipt, sort_keys=True)),
         )
+        ledger.enqueue_admitted(connection, receipt)
         connection.commit()
     except sqlite3.IntegrityError as exc:
         connection.rollback()
@@ -580,6 +575,117 @@ def write_request(path_value, request):
             temp_path.unlink(missing_ok=True)
 
 
+def open_ledger(path_value):
+    path = secure_ledger_path(path_value)
+    try:
+        connection = sqlite3.connect(path, timeout=10, isolation_level=None)
+        ledger.initialize(connection)
+        return connection
+    except sqlite3.Error as exc:
+        raise ValueError(f"could not open queue ledger: {exc}") from exc
+
+
+def repository_id_from_ledger(connection, repository):
+    for repository_id, receipt_json in connection.execute("SELECT DISTINCT repository_id, receipt_json FROM admissions"):
+        receipt = json.loads(receipt_json)
+        full_name = receipt.get("repository", {}).get("full_name", "")
+        if isinstance(full_name, str) and full_name.casefold() == repository.casefold():
+            return repository_id
+    return None
+
+
+def queue_target_policy(args, allow_stopped=False):
+    target = target_path(args.target)
+    config_file = target / ".orbit" / "config.json"
+    if (target / ".orbit").is_symlink() or config_file.is_symlink() or not config_file.is_file():
+        raise ValueError("missing safe .orbit/config.json")
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    validate(config)
+    repository = config["repository"]
+    if github_remote_repository(git_output(target, "remote", "get-url", "origin")).casefold() != repository.casefold():
+        raise ValueError("Git origin does not match the configured repository")
+    policy_path = Path(args.policy or default_policy_path()).expanduser()
+    if policy_path.resolve() == target or target in policy_path.resolve().parents:
+        raise ValueError("operator policy must be stored outside the target repository")
+    policy, _, _, policy_hash = load_policy(policy_path, repository)
+    _, _, _, limits, _ = admission_settings(policy, repository, allow_stopped=allow_stopped)
+    return target, repository, policy_hash, limits
+
+
+def queue_claim(args):
+    _, repository, policy_hash, limits = queue_target_policy(args)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        repository_id = repository_id_from_ledger(connection, repository)
+        if repository_id is None:
+            return None
+        return ledger.claim_next(
+            connection, repository_id, args.worker_id, args.claim_key, policy_hash,
+            limits, stop=False, lease_seconds=args.lease_seconds,
+        )
+    finally:
+        connection.close()
+
+
+def queue_status(args):
+    target = target_path(args.target)
+    config_file = target / ".orbit" / "config.json"
+    if (target / ".orbit").is_symlink() or config_file.is_symlink() or not config_file.is_file():
+        raise ValueError("missing safe .orbit/config.json")
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    validate(config)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        repository_id = repository_id_from_ledger(connection, config["repository"])
+        if repository_id is None:
+            return {"admissions": 0, "jobs": {}, "attempts": {}, "failed_validations": 0}
+        return ledger.status(connection, repository_id)
+    finally:
+        connection.close()
+
+
+def queue_heartbeat(args):
+    _, _, policy_hash, _ = queue_target_policy(args)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        return ledger.heartbeat(connection, args.request_id, args.lease_token, lease_seconds=args.lease_seconds, policy_sha256=policy_hash)
+    finally:
+        connection.close()
+
+
+def queue_finish(args):
+    _, repository, _, _ = queue_target_policy(args, allow_stopped=True)
+    connection = open_ledger(args.ledger or default_ledger_path())
+    try:
+        repository_id = repository_id_from_ledger(connection, repository)
+        if repository_id is None:
+            raise ValueError("no ledger admission exists for this repository")
+        return ledger.finish_attempt(
+            connection, args.request_id, args.lease_token,
+            success=args.outcome == "succeeded", details={"summary": args.summary or ""},
+            max_retries=None,
+        )
+    finally:
+        connection.close()
+
+
+def log_failed_validation(args, reason):
+    try:
+        request = json.loads(Path(args.request).expanduser().read_text(encoding="utf-8"))
+        request_id = request.get("request_id") if isinstance(request, dict) and isinstance(request.get("request_id"), str) else None
+        repository = request.get("repository") if isinstance(request, dict) else None
+        repository_id = repository.get("id") if isinstance(repository, dict) and type(repository.get("id")) is int else None
+        if repository_id is None:
+            return
+        connection = open_ledger(args.ledger or default_ledger_path())
+        try:
+            ledger.record_validation(connection, repository_id, request_id, reason)
+        finally:
+            connection.close()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError, sqlite3.Error):
+        return
+
+
 def run(args):
     if args.command == "admit":
         receipt = admit_request(args)
@@ -595,6 +701,17 @@ def run(args):
             print(f"ORBIT request written: {args.output}")
         else:
             print(json.dumps(request, indent=2))
+        return
+    if args.command == "queue":
+        if args.queue_command == "claim":
+            result = queue_claim(args)
+        elif args.queue_command == "status":
+            result = queue_status(args)
+        elif args.queue_command == "heartbeat":
+            result = queue_heartbeat(args)
+        else:
+            result = queue_finish(args)
+        print(json.dumps(result, indent=2))
         return
     target = target_path(args.target)
     orbit_dir = target / ".orbit"
@@ -658,10 +775,39 @@ def main():
     admit.add_argument("--ledger", help="private SQLite admission ledger path")
     admit.add_argument("--expires-seconds", type=int)
     admit.add_argument("--confirm-request-sha256", help="reviewed canonical request hash; required to authorize")
+    queue = sub.add_parser("queue", help="inspect and operate durable job leases")
+    queue_commands = queue.add_subparsers(dest="queue_command", required=True)
+    claim = queue_commands.add_parser("claim", help="claim one admitted job")
+    claim.add_argument("--target", required=True)
+    claim.add_argument("--policy")
+    claim.add_argument("--ledger")
+    claim.add_argument("--worker-id", required=True)
+    claim.add_argument("--claim-key", required=True, help="stable key for an idempotent claim request")
+    claim.add_argument("--lease-seconds", type=int, default=60)
+    status = queue_commands.add_parser("status", help="show queue, attempt, and validation counts")
+    status.add_argument("--target", required=True)
+    status.add_argument("--ledger")
+    heartbeat = queue_commands.add_parser("heartbeat", help="renew a live lease within its attempt deadline")
+    heartbeat.add_argument("--target", required=True)
+    heartbeat.add_argument("--policy")
+    heartbeat.add_argument("--ledger")
+    heartbeat.add_argument("--request-id", required=True)
+    heartbeat.add_argument("--lease-token", required=True)
+    heartbeat.add_argument("--lease-seconds", type=int, default=60)
+    finish = queue_commands.add_parser("finish", help="record a worker attempt result")
+    finish.add_argument("--target", required=True)
+    finish.add_argument("--policy")
+    finish.add_argument("--ledger")
+    finish.add_argument("--request-id", required=True)
+    finish.add_argument("--lease-token", required=True)
+    finish.add_argument("--outcome", choices=("succeeded", "failed"), required=True)
+    finish.add_argument("--summary")
     args = parser.parse_args()
     try:
         run(args)
     except (ValueError, OSError, json.JSONDecodeError, TypeError) as exc:
+        if args.command == "admit":
+            log_failed_validation(args, str(exc))
         parser.exit(2, f"ORBIT: {exc}\n")
 
 
