@@ -27,10 +27,13 @@
               "limits": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["admissions_per_day", "max_concurrent", "max_request_lifetime_seconds", "max_ticket_age_seconds"],
+                "required": ["admissions_per_day", "worker_attempts_per_day", "max_concurrent", "max_seconds_per_attempt", "max_retries", "max_request_lifetime_seconds", "max_ticket_age_seconds"],
                 "properties": {
                   "admissions_per_day": {"type": "integer", "minimum": 1},
+                  "worker_attempts_per_day": {"type": "integer", "minimum": 1},
                   "max_concurrent": {"type": "integer", "minimum": 1},
+                  "max_seconds_per_attempt": {"type": "integer", "minimum": 1},
+                  "max_retries": {"type": "integer", "minimum": 0},
                   "max_request_lifetime_seconds": {"type": "integer", "minimum": 1},
                   "max_ticket_age_seconds": {"type": "integer", "minimum": 1}
                 }

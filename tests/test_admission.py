@@ -38,7 +38,10 @@ class AdmissionTests(unittest.TestCase):
                 "stop": False,
                 "limits": {
                     "admissions_per_day": 5,
+                    "worker_attempts_per_day": 5,
                     "max_concurrent": 3,
+                    "max_seconds_per_attempt": 600,
+                    "max_retries": 2,
                     "max_request_lifetime_seconds": 3600,
                     "max_ticket_age_seconds": 86400,
                 },
