@@ -1,9 +1,11 @@
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -11,10 +13,13 @@ DEFAULT = {"schema_version": 1, "repository": "", "agent": {"builder": "unconfig
 
 
 def validate(config):
-    if not isinstance(config, dict) or config.get("schema_version") != 1:
+    if not isinstance(config, dict) or type(config.get("schema_version")) is not int or config["schema_version"] != 1:
         raise ValueError("unsupported schema_version")
-    if not isinstance(config.get("repository"), str) or not REPO_PATTERN.fullmatch(config["repository"]):
+    if not valid_repository(config.get("repository")):
         raise ValueError("repository must be owner/name")
+    agent = config.get("agent")
+    if not isinstance(agent, dict) or not isinstance(agent.get("builder"), str) or not isinstance(agent.get("reviewer"), str):
+        raise ValueError("agent.builder and agent.reviewer must be strings")
     limits = config.get("limits")
     if not isinstance(limits, dict):
         raise ValueError("limits missing")
@@ -27,13 +32,24 @@ def validate(config):
     safety = config.get("safety")
     if not isinstance(safety, dict) or safety.get("auto_merge") is not False or safety.get("allow_deploy") is not False or safety.get("allow_destructive_cleanup") is not False or safety.get("stop") is not True:
         raise ValueError("Phase 1 safety invariants must remain enabled")
-    if config.get("delivery", {}).get("pull_request") != "draft":
+    delivery = config.get("delivery")
+    if not isinstance(delivery, dict) or delivery.get("pull_request") != "draft":
         raise ValueError("Phase 1 delivery must be draft")
     return True
 
 
+def valid_repository(value):
+    if not isinstance(value, str) or not REPO_PATTERN.fullmatch(value):
+        return False
+    owner, name = value.split("/", 1)
+    return owner not in (".", "..") and name not in (".", "..") and not name.endswith(".git")
+
+
 def target_path(value):
-    target = Path(value).expanduser().resolve()
+    requested = Path(value).expanduser()
+    if requested.is_symlink():
+        raise ValueError("target directory must not be a symlink")
+    target = requested.resolve()
     if not target.is_dir():
         raise ValueError("target directory does not exist")
     return target
@@ -41,20 +57,30 @@ def target_path(value):
 
 def run(args):
     target = target_path(args.target)
-    config_file = target / ".orbit" / "config.json"
+    orbit_dir = target / ".orbit"
+    config_file = orbit_dir / "config.json"
     if args.command == "init":
-        if not REPO_PATTERN.fullmatch(args.repo):
+        if not valid_repository(args.repo):
             raise ValueError("repository must be owner/name")
-        if config_file.exists() or (target / ".orbit" / "AGENT_BOOTSTRAP.md").exists():
+        if orbit_dir.exists() or orbit_dir.is_symlink():
             raise ValueError("ORBIT bootstrap files already exist; refusing overwrite")
         config = json.loads(json.dumps(DEFAULT))
         config["repository"] = args.repo
         validate(config)
-        config_file.parent.mkdir(exist_ok=True)
-        config_file.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
-        (config_file.parent / "AGENT_BOOTSTRAP.md").write_text("# Fresh Agent Bootstrap\n\nRead the repository AGENTS.md if present, .orbit/config.json, current GitHub issue, relevant docs and tests. Confirm remote, branch and HEAD. Never assume previous conversation context. Stay within approved scope and preserve existing worktrees and untracked files. No automatic merge or deployment.\n", encoding="utf-8")
+        staging = Path(tempfile.mkdtemp(prefix=".orbit-init-", dir=target))
+        try:
+            (staging / "config.json").write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+            (staging / "AGENT_BOOTSTRAP.md").write_text("# Fresh Agent Bootstrap\n\nRead the repository AGENTS.md if present, .orbit/config.json, current GitHub issue, relevant docs and tests. Confirm remote, branch and HEAD. Never assume previous conversation context. Stay within approved scope and preserve existing worktrees and untracked files. No automatic merge or deployment.\n", encoding="utf-8")
+            if orbit_dir.exists() or orbit_dir.is_symlink():
+                raise ValueError("ORBIT bootstrap files already exist; refusing overwrite")
+            os.rename(staging, orbit_dir)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         print(f"ORBIT initialized: {config_file}")
     else:
+        if orbit_dir.is_symlink() or config_file.is_symlink():
+            raise ValueError("ORBIT configuration paths must not be symlinks")
         if not config_file.is_file():
             raise ValueError("missing .orbit/config.json; run orbit init")
         config = json.loads(config_file.read_text(encoding="utf-8"))
@@ -81,7 +107,7 @@ def main():
     args = parser.parse_args()
     try:
         run(args)
-    except (ValueError, OSError, json.JSONDecodeError) as exc:
+    except (ValueError, OSError, json.JSONDecodeError, TypeError) as exc:
         parser.exit(2, f"ORBIT: {exc}\n")
 
 
